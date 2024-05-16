@@ -1,5 +1,5 @@
 # Todo: Import specific things, not whole library
-import argparse
+
 from kubernetes import client, config
 import sys
 from time import sleep
@@ -11,14 +11,6 @@ def connect_to_cluster(cnfg_file):
     api = client.CoreV1Api()
     return api
 
-# Use this func of you want to do input validation
-def check_args():
-    # Check that the args are valid
-    pass
-
-def check_input(user_input):
-    # check that the user inputs at both stages in the program are valid
-    pass
 
 def get_namespace_input(namespace_list):
     # Gets the namespace choices from the user as indicies
@@ -40,7 +32,6 @@ def get_input(api):
     # The main get input function that calls the other two. After getting the namespaces, it retrieves all the pods and puts them in a new list and returns it
     ns_list = api.list_namespace()
     ns_choices = [int(i) for i in get_namespace_input(ns_list)]  # Get the namespace choices
-    print(ns_choices)
     pod_list = []
     for idx in ns_choices:  # Gather all the pods from the namespaces chosen
         pod_list.append(api.list_namespaced_pod(namespace=ns_list.items[idx-1].metadata.name))
@@ -64,7 +55,7 @@ def pod_monitoring_loop(api):
                 logger.info(f"Status of pod {pod_name} in namespace {pod_namespace} is: {api.read_namespaced_pod_status(name=pod_name,namespace=pod_namespace).status.phase}")
             except client.rest.ApiException as e:
                 if "Not Found" in e.reason:
-                    logger.info(f"Status of pod {pod_name} in namespace {pod_namespace} is: Deleted")
+                    logger.info(f"Status of pod {pod_name} in namespace {pod_namespace} is: Deleted/Crashed")
         sleep(5)
 
 
