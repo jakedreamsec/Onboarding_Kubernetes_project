@@ -1,9 +1,9 @@
 # Todo: Import specific things, not whole library
 
 from kubernetes import client, config
-import sys
 from time import sleep
 from loguru import logger
+import argparse
 
 def connect_to_cluster(cnfg_file):
     # Initial connection to cluster
@@ -12,42 +12,10 @@ def connect_to_cluster(cnfg_file):
     return api
 
 
-def get_namespace_input(namespace_list):
-    # Gets the namespace choices from the user as indicies
-    namespace_names = [ns.metadata.name for ns in namespace_list.items]
-    user_input = input("\nThere are " + str(len(namespace_names)) + " namespaces to choose from." \
-                                                              "\nPlease pick one or more namespaces to monitor, and pick the namespace by the given number below, separated by spaces:" \
-                                                              "\n"+"\n".join([str(idx)+". "+name for idx,name in enumerate(namespace_names, start=1)]) + "\n")
-    return user_input.split()
-
-def get_pod_input(pods_list):
-    # Gets the pod choices from the user as indicies
-    pod_names = [pod.metadata.name for pod_group in pods_list for pod in pod_group.items]
-    user_input = input("\nThere are " + str(len(pod_names)) + " pods to choose from." \
-            "\nPlease pick one or more pods to monitor, and pick the pod by the given number below, separated by spaces:" \
-                       "\n"+"\n".join([str(idx)+". "+name for idx,name in enumerate(pod_names, start=1)]) + "\n")
-    return user_input.split()
-
-def get_input(api):
-    # The main get input function that calls the other two. After getting the namespaces, it retrieves all the pods and puts them in a new list and returns it
-    ns_list = api.list_namespace()
-    ns_choices = [int(i) for i in get_namespace_input(ns_list)]  # Get the namespace choices
-    pod_list = []
-    for idx in ns_choices:  # Gather all the pods from the namespaces chosen
-        pod_list.append(api.list_namespaced_pod(namespace=ns_list.items[idx-1].metadata.name))
-
-    pod_choices = [int(i) for i in get_pod_input(pod_list)]  # Get the pod choices
-    flattened_pod_lst = [pod for pod_group in pod_list for pod in pod_group.items]  # flatten the 2D list to match the user's index choices
-    return [flattened_pod_lst[idx-1] for idx in pod_choices]
-
-def pod_monitoring_loop(api):
-    # The loop for monitoring the chosen pods
-    user_pod_picks = get_input(api) # The user chooses the pods to be monitored from the cluster namespaces
-    for pod in user_pod_picks:  # Just temporarily to make sure it works
-        print(pod.metadata.name)
+def pod_monitoring_loop(api, picked_pods):
 
     while True:
-        for pod in user_pod_picks:
+        for pod in picked_pods:
             pod_name = pod.metadata.name
             pod_namespace = pod.metadata.namespace
 
@@ -58,9 +26,80 @@ def pod_monitoring_loop(api):
                     logger.info(f"Status of pod {pod_name} in namespace {pod_namespace} is: Deleted/Crashed")
         sleep(5)
 
+def show_command(args):
+    api = connect_to_cluster(args.cluster)
+    ns_list = api.list_namespace()
+
+    if args.all_namespaces:  # No pods were specified, so show all namespaces
+        ns_names = [ns.metadata.name for ns in ns_list.items]
+        print("NAMESPACES:")
+        print("\n".join([str(idx)+". "+name for idx, name in enumerate(ns_names, start=1)]))
+        return
+
+    if args.all_pods:
+        for ns in ns_list.items:
+            print("Namespace",ns.metadata.name,"contains these pods:")
+            for idx, pod in enumerate(api.list_namespaced_pod(namespace=ns.metadata.name).items,start=1):
+                print(str(idx)+".", pod.metadata.name)
+        return
+
+    # If specific namespaces were chosen:
+    for ns in args.namespaces:
+        print("Namespace",ns,"contains these pods:")
+        for idx, pod in enumerate(api.list_namespaced_pod(namespace=ns).items,start=1):
+            print(str(idx)+".", pod.metadata.name)
+
+
+def monitor_command(args):
+    if args.pods and not args.namespaces:
+        print("-n/--namespaces is required when -p/--pods is specified")
+        return
+
+    api = connect_to_cluster(args.cluster)
+    picked_pods = []
+
+    if args.all:
+        picked_pods = api.list_pod_for_all_namespaces(watch=False).items
+
+    elif args.namespaces and not args.pods:
+        pod_groups = []
+        for ns_name in args.namespaces:
+            pod_groups.append(api.list_namespaced_pod(namespace=ns_name))
+        picked_pods = [pod for pod_group in pod_groups for pod in pod_group.items]
+
+    elif args.namespaces and args.pods:
+
+        for ns_name in args.namespaces:
+            ns_pods = api.list_namespaced_pod(ns_name)
+            pod_names = [pod.metadata.name for pod in ns_pods.items]
+            for pod_name in args.pods:
+                if pod_name in pod_names:
+                    picked_pods.append(api.read_namespaced_pod(name = pod_name,  namespace=ns_name))
+
+    pod_monitoring_loop(api, picked_pods)
+
 
 if __name__ == "__main__":
-    api = connect_to_cluster(sys.argv[1])
-    pod_monitoring_loop(api)
+    parser = argparse.ArgumentParser(description='This prog is a Cluster-health-check program that logs specified pods\' health')
+    subparsers = parser.add_subparsers(title="Commands", dest='command')
+
+    parser_show_command = subparsers.add_parser('show',help="Displays the Namespaces or Pods in the cluster")
+    parser_show_command.add_argument('-c','--cluster',type=str,default="~/.kube/config", help="Cluster that you choose")
+    parser_show_command.add_argument('-P','--all_pods', action='store_true', help="Show all pods in all namespaces")
+    parser_show_command.add_argument('-N','--all_namespaces', action='store_true', help="Show all namespaces")
+    parser_show_command.add_argument('-n','--namespaces', type=str, nargs="+", help="Namespaces whose pods we want to show")
+    parser_show_command.set_defaults(func=show_command)
+
+    parser_monitor = subparsers.add_parser('monitor',help="Monitor the specified pods")
+    parser_monitor.add_argument('-c','--cluster',type=str,default="~/.kube/config", nargs='*',help="Cluster to monitor")
+    parser_monitor.add_argument('-n','--namespaces', type=str, nargs='*',help="The namespaces whose pods we want to monitor")
+    parser_monitor.add_argument('-A','--all', action='store_true', help="Monitor all pods in all namespaces")
+    parser_monitor.add_argument('-p','--pods', type=str, nargs='*', help="Specific Pods to monitor")
+    parser_monitor.set_defaults(func=monitor_command)
+
+    args = parser.parse_args()
+
+    args.func(args)
+
 
 
