@@ -4,6 +4,7 @@ from kubernetes import client, config
 from time import sleep
 from loguru import logger
 import argparse
+SLEEP_TIME = 2
 
 def connect_to_cluster(cnfg_file):
     # Initial connection to cluster
@@ -20,27 +21,27 @@ def pod_monitoring_loop(api, picked_pods):
             pod_namespace = pod.metadata.namespace
 
             try:
-                logger.info(f"Status of pod {pod_name} in namespace {pod_namespace} is: {api.read_namespaced_pod_status(name=pod_name,namespace=pod_namespace).status.phase}")
+                logger.info(f"Status of pod {pod_name} in namespace {pod_namespace} is: "
+                            f"{api.read_namespaced_pod_status(name=pod_name,namespace=pod_namespace).status.phase}")
             except client.rest.ApiException as e:
                 if "Not Found" in e.reason:
                     logger.info(f"Status of pod {pod_name} in namespace {pod_namespace} is: Deleted/Crashed")
-        sleep(5)
+        sleep(SLEEP_TIME)
 
-def show_command(args):
-    api = connect_to_cluster(args.cluster)
+def show_command(args, api):
+
     ns_list = api.list_namespace()
 
     if args.all_namespaces:  # No pods were specified, so show all namespaces
         ns_names = [ns.metadata.name for ns in ns_list.items]
-        print("NAMESPACES:")
-        print("\n".join([str(idx)+". "+name for idx, name in enumerate(ns_names, start=1)]))
+        print("NAMESPACES:\n"+"\n".join([str(idx)+". "+name for idx, name in enumerate(ns_names, start=1)]))
         return
 
     if args.all_pods:
         for ns in ns_list.items:
-            print("Namespace",ns.metadata.name,"contains these pods:")
-            for idx, pod in enumerate(api.list_namespaced_pod(namespace=ns.metadata.name).items,start=1):
-                print(str(idx)+".", pod.metadata.name)
+            print("Namespace",ns.metadata.name,"contains these pods:\n"+"\n".join([str(idx)+". "+pod.metadata.name for idx, pod in enumerate(api.list_namespaced_pod(namespace=ns.metadata.name).items, start=1)]))
+            # for idx, pod in enumerate(api.list_namespaced_pod(namespace=ns.metadata.name).items,start=1):
+            #     print(str(idx)+".", pod.metadata.name)
         return
 
     # If specific namespaces were chosen:
@@ -50,12 +51,11 @@ def show_command(args):
             print(str(idx)+".", pod.metadata.name)
 
 
-def monitor_command(args):
+def monitor_command(args, api):
     if args.pods and not args.namespaces:
         print("-n/--namespaces is required when -p/--pods is specified")
         return
 
-    api = connect_to_cluster(args.cluster)
     picked_pods = []
 
     if args.all:
@@ -99,7 +99,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    args.func(args)
+    api = connect_to_cluster(args.cluster)
+
+    args.func(args,api)
 
 
 
